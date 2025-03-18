@@ -2,6 +2,17 @@ import re
 from typing import List, Tuple, Set, Dict
 import unicodedata
 from collections import defaultdict
+import nltk
+from nltk.tag import pos_tag
+from nltk.tokenize import word_tokenize
+
+# Download required NLTK data
+try:
+    nltk.data.find('tokenizers/punkt')
+    nltk.data.find('taggers/averaged_perceptron_tagger')
+except LookupError:
+    nltk.download('punkt')
+    nltk.download('averaged_perceptron_tagger')
 
 class SpellChecker:
     def __init__(self, dictionary_file: str = "data/medium_corpus.txt", real_word_threshold: float = 0.00001):
@@ -20,6 +31,75 @@ class SpellChecker:
         self.right_trigrams = defaultdict(int)  # New: right trigrams
         self.real_word_threshold = real_word_threshold
         self._load_ngrams(dictionary_file)
+        
+        # Initialize confusion sets
+        self.confusion_sets = {
+            'their': {'there', 'they\'re'},
+            'there': {'their', 'they\'re'},
+            'they\'re': {'their', 'there'},
+            'your': {'you\'re'},
+            'you\'re': {'your'},
+            'its': {'it\'s'},
+            'it\'s': {'its'},
+            'to': {'too', 'two'},
+            'too': {'to', 'two'},
+            'two': {'to', 'too'},
+            'than': {'then'},
+            'then': {'than'},
+            'affect': {'effect'},
+            'effect': {'affect'},
+            'accept': {'except'},
+            'except': {'accept'},
+            'weather': {'whether'},
+            'whether': {'weather'},
+            'principal': {'principle'},
+            'principle': {'principal'},
+            'stationary': {'stationery'},
+            'stationery': {'stationary'},
+            'complement': {'compliment'},
+            'compliment': {'complement'},
+            'desert': {'dessert'},
+            'dessert': {'desert'},
+            'loose': {'lose'},
+            'lose': {'loose'},
+            'passed': {'past'},
+            'past': {'passed'},
+            'peace': {'piece'},
+            'piece': {'peace'},
+            'plain': {'plane'},
+            'plane': {'plain'},
+            'right': {'write'},
+            'write': {'right'},
+            'sight': {'site', 'cite'},
+            'site': {'sight', 'cite'},
+            'cite': {'sight', 'site'},
+            'threw': {'through'},
+            'through': {'threw'},
+            'waist': {'waste'},
+            'waste': {'waist'},
+            'weak': {'week'},
+            'week': {'weak'},
+            'wear': {'where'},
+            'where': {'wear'},
+            'which': {'witch'},
+            'witch': {'which'},
+            'whose': {'who\'s'},
+            'who\'s': {'whose'}
+        }
+        
+        # Initialize POS-specific confusion sets
+        self.pos_confusion_sets = {
+            'NN': {'VB', 'VBD', 'VBG', 'VBN', 'VBP', 'VBZ'},  # Noun vs Verb
+            'VB': {'NN', 'NNS', 'NNP', 'NNPS'},  # Verb vs Noun
+            'JJ': {'RB'},  # Adjective vs Adverb
+            'RB': {'JJ'},  # Adverb vs Adjective
+            'IN': {'CC'},  # Preposition vs Conjunction
+            'CC': {'IN'},  # Conjunction vs Preposition
+            'DT': {'WDT'},  # Determiner vs Wh-determiner
+            'WDT': {'DT'},  # Wh-determiner vs Determiner
+            'PRP': {'PRP$'},  # Personal pronoun vs Possessive pronoun
+            'PRP$': {'PRP'}  # Possessive pronoun vs Personal pronoun
+        }
         
     def _preprocess_word(self, word: str) -> str:
         """
@@ -156,11 +236,29 @@ class SpellChecker:
         
         return unigram_prob
     
+    def _get_word_pos(self, word: str, context: List[str] = None) -> str:
+        """
+        Get the POS tag for a word using NLTK's pos_tag.
+        If context is provided, uses it to improve POS tagging accuracy.
+        """
+        if context:
+            # Create a sentence with context and target word
+            sentence = ' '.join(context + [word])
+        else:
+            sentence = word
+            
+        # Tokenize and tag
+        tokens = word_tokenize(sentence)
+        tags = pos_tag(tokens)
+        
+        # Return the tag for the target word
+        return tags[-1][1] if context else tags[0][1]
+    
     def check_text(self, text: str) -> List[Tuple[str, int, int, str]]:
         """
         Check text for spelling errors and real-word errors.
         Returns a list of tuples containing (word, start_position, end_position, error_type).
-        error_type can be 'non_word' or 'real_word'.
+        error_type can be 'non_word', 'real_word', or 'confusion_set'.
         """
         # Split text into words while preserving positions
         words = []
@@ -178,14 +276,26 @@ class SpellChecker:
                 errors.append((word, start, end, 'non_word'))
                 continue
             
-            # Check for real-word errors using both left and right context
+            # Get context for POS tagging and probability calculation
             context = [w for w, _, _ in words[max(0, i-2):i]]  # Get previous 2 words
             next_words = [w for w, _, _ in words[i+1:min(len(words), i+3)]]  # Get next 2 words
             
-            # Calculate probability of current word in context
-            current_prob = self._get_word_probability(word, context, next_words)
+            # Get POS tag for the current word
+            current_pos = self._get_word_pos(word, context)
             
-            # Get word frequency
+            # Check for confusion set errors
+            if processed_word in self.confusion_sets:
+                # Get POS tags for potential confusion words
+                confusion_words = self.confusion_sets[processed_word]
+                for conf_word in confusion_words:
+                    conf_pos = self._get_word_pos(conf_word, context)
+                    # If the confusion word has a different POS tag that matches the context better
+                    if conf_pos != current_pos and conf_pos in self.pos_confusion_sets.get(current_pos, set()):
+                        errors.append((word, start, end, 'confusion_set'))
+                        break
+            
+            # Check for real-word errors using both left and right context
+            current_prob = self._get_word_probability(word, context, next_words)
             word_freq = self.word_frequencies.get(processed_word, 0)
             
             # Only flag as real-word error if both probability is low AND word is relatively rare
@@ -233,27 +343,27 @@ class SpellChecker:
     
     def get_suggestions(self, word: str, context: List[str] = None, max_suggestions: int = 5, max_distance: int = 2) -> List[Tuple[str, int, float]]:
         """
-        Generate spelling suggestions for a misspelled word using Levenshtein distance
-        and n-gram probabilities.
-        
-        Args:
-            word: The misspelled word to find suggestions for
-            context: List of words before the current word
-            max_suggestions: Maximum number of suggestions to return
-            max_distance: Maximum Levenshtein distance allowed for suggestions
-            
-        Returns:
-            List of tuples containing (suggested_word, distance, probability), sorted by combined score.
-            Words with distance 0 (identical to input) are excluded.
+        Generate spelling suggestions for a misspelled word using Levenshtein distance,
+        n-gram probabilities, and confusion sets.
         """
         processed_word = self._preprocess_word(word)
         suggestions = []
         
+        # Get POS tag for better suggestions
+        current_pos = self._get_word_pos(word, context) if context else self._get_word_pos(word)
+        
+        # Check confusion sets first
+        if processed_word in self.confusion_sets:
+            confusion_words = self.confusion_sets[processed_word]
+            for conf_word in confusion_words:
+                conf_pos = self._get_word_pos(conf_word, context) if context else self._get_word_pos(conf_word)
+                if conf_pos == current_pos or conf_pos in self.pos_confusion_sets.get(current_pos, set()):
+                    suggestions.append((conf_word, 0, 1.0))  # High probability for confusion set words
+        
+        # Get Levenshtein distance-based suggestions
         for dict_word in self.dictionary:
             distance = self._levenshtein_distance(processed_word, dict_word)
-            # Only include words with distance > 0 and <= max_distance
             if 0 < distance <= max_distance:
-                # Calculate probability in context if context is provided
                 prob = self._get_word_probability(dict_word, context) if context else 0.0
                 suggestions.append((dict_word, distance, prob))
         

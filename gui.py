@@ -89,6 +89,11 @@ class SpellCheckerGUI:
         self.char_count_label = ttk.Label(main_frame, text="Characters: 0/500")
         self.char_count_label.grid(row=1, column=0, columnspan=2, sticky=tk.W, pady=(2, 0))
         
+        # Create status label for checkmark and message
+        self.status_label = ttk.Label(main_frame, text="✓ No errors found", foreground="green")
+        self.status_label.grid(row=1, column=1, sticky=tk.E, pady=(2, 0))
+        self.status_label.grid_remove()  # Hide initially
+        
         # Create button frame
         button_frame = ttk.Frame(main_frame)
         button_frame.grid(row=2, column=0, columnspan=2, pady=5)
@@ -157,17 +162,18 @@ class SpellCheckerGUI:
         
         if not text:
             messagebox.showinfo("Empty Text", "Please enter some text to spell check.")
+            self.status_label.grid_remove()  # Hide checkmark
             return
         
         # Check for spelling errors
         errors = self.spell.check_text(text)
         
         if not errors:
-            messagebox.showinfo("No Errors", "No spelling errors found in the text!")
-            return
-        
-        # Highlight errors in the text editor
-        self.highlight_errors(errors)
+            self.status_label.grid()  # Show checkmark
+        else:
+            self.status_label.grid_remove()  # Hide checkmark
+            # Highlight errors in the text editor
+            self.highlight_errors(errors)
 
     def show_suggestions(self, event):
         """Show suggestions when clicking on a highlighted word."""
