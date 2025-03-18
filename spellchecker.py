@@ -17,6 +17,7 @@ class SpellChecker:
         self.bigrams = defaultdict(int)
         self.right_bigrams = defaultdict(int)
         self.trigrams = defaultdict(int)
+        self.right_trigrams = defaultdict(int)  # New: right trigrams
         self.real_word_threshold = real_word_threshold
         self._load_ngrams(dictionary_file)
         
@@ -80,9 +81,13 @@ class SpellChecker:
                 for i in range(1, len(words)):
                     self.right_bigrams[(words[i-1], words[i])] += 1
                 
-                # Count trigrams
+                # Count left trigrams
                 for i in range(len(words) - 2):
                     self.trigrams[(words[i], words[i + 1], words[i + 2])] += 1
+                
+                # Count right trigrams
+                for i in range(2, len(words)):
+                    self.right_trigrams[(words[i-2], words[i-1], words[i])] += 1
         
         # Store total word count for probability calculations
         self.total_words = total_words
@@ -107,12 +112,26 @@ class SpellChecker:
         # Calculate unigram probability
         unigram_prob = self.word_frequencies.get(word, 0) / self.total_words
         
-        # Try trigram first if we have enough context
+        # Try left trigram first if we have enough context
         if len(context) >= 2:
             trigram = tuple(context[-2:] + [word])
             if trigram in self.trigrams:
                 trigram_prob = self.trigrams[trigram] / sum(self.trigrams.values())
-                return 0.7 * trigram_prob + 0.3 * unigram_prob
+                
+                # If we have right context, combine with right trigram probability
+                if next_words and len(next_words) >= 2:
+                    right_trigram = tuple([word] + next_words[:2])
+                    if right_trigram in self.right_trigrams:
+                        right_trigram_prob = self.right_trigrams[right_trigram] / sum(self.right_trigrams.values())
+                        return 0.5 * trigram_prob + 0.3 * right_trigram_prob + 0.2 * unigram_prob
+                return 0.8 * trigram_prob + 0.2 * unigram_prob
+        
+        # Try right trigram if we have enough right context
+        if next_words and len(next_words) >= 2:
+            right_trigram = tuple([word] + next_words[:2])
+            if right_trigram in self.right_trigrams:
+                right_trigram_prob = self.right_trigrams[right_trigram] / sum(self.right_trigrams.values())
+                return 0.8 * right_trigram_prob + 0.2 * unigram_prob
         
         # Try left bigram
         if len(context) >= 1:
